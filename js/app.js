@@ -13,42 +13,44 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 $('#defs').innerHTML = defsSVG();
 
 // ---------- settings & match state ----------
-const DEFAULTS = { mode: 'bot', level: 'medium', rounds: 3, name: 'You' };
+const DEFAULTS = { mode: 'bot', level: 'medium', rounds: 3, name: '' };
 let cfg = { ...DEFAULTS };
 try { cfg = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('lostcities.cfg') || '{}') }; } catch {}
+if (cfg.mode === 'hotseat') cfg.mode = 'bot';
 const saveCfg = () => { try { localStorage.setItem('lostcities.cfg', JSON.stringify(cfg)); } catch {} };
 
-let match = null;     // { round, totals, starter, names }
-let state = null;     // current round (game.js)
-let ui = null;        // { selected, curtain, busy, marks, log, view, lastView }
+let match = null;     // { cfg, round, totals, starter, names, seat }
+let state = null;     // current round (same shape as game.js; online it is rebuilt from the server's view)
+let ui = null;        // { selected, busy, pending, marks, log }
 let botRun = 0;
+let net = null;       // online connection: { code, token, es, seq, connected, ready, started }
 
-const hot = () => match.cfg.mode === 'hotseat';
-const view = () => (hot() ? ui.view : 0);
+const online = () => match.cfg.mode === 'online';
+const view = () => match.seat || 0;
 
-// ---------- flow ----------
+// ---------- local game vs bot ----------
 function startMatch() {
-  const names = cfg.mode === 'bot' ? [cfg.name.trim() || 'You', 'Bot'] : ['Player 1', 'Player 2'];
-  match = { cfg: { ...cfg }, round: 1, totals: [0, 0], starter: 0, names };
+  leaveOnline();
+  const names = [cfg.name.trim() || 'You', 'Bot'];
+  match = { cfg: { ...cfg }, round: 1, totals: [0, 0], starter: 0, names, seat: 0 };
   startRound();
 }
 
 function startRound() {
   botRun++;
   state = newRound({ starter: match.starter });
-  ui = { selected: null, curtain: false, busy: false, marks: { cards: new Set(), piles: new Set() }, log: [], view: match.starter, summary: null };
+  ui = freshUi();
   closeOverlay();
   log(`Round ${match.round} begins: ${match.names[state.turn]} to start.`);
   render();
-  if (hot()) { ui.curtain = true; render(); showCurtain(); }
-  else if (state.turn === 1) runBot();
+  if (state.turn === 1) runBot();
 }
+
+const freshUi = () => ({ selected: null, busy: false, pending: false, marks: { cards: new Set(), piles: new Set() }, log: [] });
 
 function afterTurn() {
   if (state.over) return endRound();
-  if (!hot()) return runBot();
-  ui.curtain = true; ui.view = state.turn;
-  render(); showCurtain();
+  runBot();
 }
 
 function endRound() {
@@ -82,43 +84,46 @@ async function runBot() {
 }
 
 // ---------- human actions ----------
-const myTurn = () => state && !state.over && !ui.busy && !ui.curtain && (hot() || state.turn === 0);
+const myTurn = () => state && match && !state.over && !ui.busy && !ui.pending && state.turn === view() && (!online() || net?.started);
 
 function onTarget(t) {
   if (!myTurn()) return;
-  const p = state.turn;
+  const p = view();
   if (state.phase === 'play') {
     if (!ui.selected) return toast('Pick a card from your hand first');
     const card = findInHand(state, p, ui.selected);
     if (!card) return;
     if (t === `exp:${card.color}`) {
       if (!canPlayOn(state.exp[p][card.color], card)) return toast(card.value === 0 ? 'Wagers must come before any number in an expedition' : 'Expedition cards must go up: play a higher number');
-      act(() => playCard(state, p, card.id, 'expedition'), `${match.names[p]} played ${cname(card)}.`);
-    } else if (t === `disc:${card.color}`) {
-      act(() => playCard(state, p, card.id, 'discard'), `${match.names[p]} discarded ${cname(card)}.`);
-    } else if (t !== 'deck') toast(`That card belongs to the ${card.color} column`);
+      commitPlay(card, 'expedition');
+    } else if (t === `disc:${card.color}`) commitPlay(card, 'discard');
+    else if (t !== 'deck') toast(`That card belongs to the ${card.color} column`);
   } else {
-    if (t === 'deck') { drawNow('deck'); }
+    if (t === 'deck') commitDraw('deck');
     else if (t.startsWith('disc:')) {
       const col = t.slice(5);
       if (col === state.lastDiscard) return toast("You can't pick up the card you just discarded");
       if (!state.discard[col].length) return toast('That discard pile is empty');
-      drawNow(col);
+      commitDraw(col);
     }
   }
 }
 
-function act(fn, msg) {
+function commitPlay(card, kind) {
+  ui.selected = null;
+  if (online()) return send({ type: 'play', card: card.id, kind });
   ui.marks = { cards: new Set(), piles: new Set() };
-  fn(); ui.selected = null; log(msg); render();
+  playCard(state, 0, card.id, kind);
+  log(`${match.names[0]} ${kind === 'discard' ? 'discarded' : 'played'} ${cname(card)}.`);
+  render();
 }
 
-function drawNow(src) {
-  const p = state.turn;
-  const top = src === 'deck' ? null : state.discard[src][state.discard[src].length - 1];
-  drawCard(state, p, src);
-  log(src === 'deck' ? `${match.names[p]} drew from the deck.` : `${match.names[p]} took ${cname(top)} from the discards.`);
+function commitDraw(src) {
   ui.selected = null;
+  if (online()) return send({ type: 'draw', from: src });
+  const top = src === 'deck' ? null : state.discard[src][state.discard[src].length - 1];
+  drawCard(state, 0, src);
+  log(src === 'deck' ? `${match.names[0]} drew from the deck.` : `${match.names[0]} took ${cname(top)} from the discards.`);
   afterTurn();
 }
 
@@ -126,6 +131,121 @@ function select(id) {
   if (!myTurn() || state.phase !== 'play') return;
   ui.selected = ui.selected === id ? null : id;
   syncSelection();
+}
+
+// ---------- online ----------
+const tokenKey = 'lostcities.token';
+function myToken() {
+  let t = null;
+  try { t = sessionStorage.getItem(tokenKey); } catch {}
+  if (!t) {
+    t = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+    try { sessionStorage.setItem(tokenKey, t); } catch {}
+  }
+  return t;
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
+  return data;
+}
+
+function leaveOnline(notify = false) {
+  if (!net) return;
+  if (notify && !net.started) fetch(`/api/rooms/${net.code}/act`, { method: 'POST', body: JSON.stringify({ token: net.token, type: 'leave' }), keepalive: true }).catch(() => {});
+  net.ctl?.abort(); net = null;
+  document.title = 'Lost Cities';
+  if (location.pathname.startsWith('/r/')) history.replaceState(null, '', '/');
+}
+
+async function createTable() {
+  try {
+    const { room } = await api('/api/rooms', { method: 'POST', body: JSON.stringify({ rounds: cfg.rounds }) });
+    await joinTable(room);
+  } catch (e) { toast(e.message); }
+}
+
+async function joinTable(code) {
+  code = code.trim().toUpperCase();
+  const token = myToken();
+  try {
+    const info = await api(`/api/rooms/${code}?token=${token}`);
+    if (info.full && !info.seated) throw new Error('That table is already full');
+  } catch (e) { return toast(e.message); }
+  leaveOnline();
+  botRun++;
+  net = { code, token, rev: -1, seq: -1, started: false, round: 0, name: cfg.name.trim(), ctl: null };
+  match = { cfg: { ...cfg, mode: 'online' }, round: 1, totals: [0, 0], starter: 0, names: [cfg.name.trim() || 'Player', '…'], seat: 0 };
+  state = newRound({}); ui = freshUi(); ui.busy = false;
+  history.replaceState(null, '', `/r/${code}`);
+  pollLoop(net);
+  closeOverlay(); render(); showLobby();
+}
+
+async function pollLoop(n) {
+  while (net === n) {
+    try {
+      n.ctl = new AbortController();
+      const m = await api(`/api/rooms/${n.code}/poll?token=${n.token}&name=${encodeURIComponent(n.name)}&rev=${n.rev}`, { signal: n.ctl.signal });
+      if (net !== n) return;
+      if (n.lost) { n.lost = false; render(); }
+      if (m.rev !== n.rev) { n.rev = m.rev; onUpdate(m); }
+    } catch (e) {
+      if (net !== n) return;
+      if (/No table|full/i.test(e.message)) { leaveOnline(); showMenu(false); return toast(e.message); }
+      n.lost = true; ui.pending = false; render();
+      await sleep(1500);
+    }
+  }
+}
+
+function fromView(v, seat) {
+  const o = 1 - seat;
+  const hands = [];
+  hands[seat] = v.hand;
+  hands[o] = Array.isArray(v.oppHand) ? v.oppHand : Array(v.oppHand).fill(null);
+  return { deck: Array(v.deck).fill(null), hands, exp: v.exp, discard: v.discard, turn: v.turn, phase: v.phase, lastDiscard: v.lastDiscard, over: v.over };
+}
+
+function onUpdate(m) {
+  if (!net) return;
+  net.lost = false; net.ready = m.ready; net.connected = m.connected; net.started = m.started;
+  const fresh = net.seq < 0; const roundChanged = net.round !== m.round;
+  const names = m.names.map((n, i) => n || (i === m.seat ? 'You' : 'Waiting…'));
+  match = { cfg: { ...cfg, mode: 'online', rounds: m.rounds }, round: m.round, totals: m.totals, starter: 0, names, seat: m.seat };
+  ui.pending = false;
+  if (!m.started) { render(); return showLobby(); }
+  if (!state || roundChanged || fresh) { ui = freshUi(); }
+  state = fromView(m.view, m.seat);
+  if (roundChanged) { net.round = m.round; ui.log = []; log(`Round ${m.round} begins: ${names[state.turn]} to start.`); closeOverlay(); }
+  if (m.seq !== net.seq && !fresh && !roundChanged) {
+    if (m.events.some((e) => e.p === m.seat)) ui.marks = { cards: new Set(), piles: new Set() };
+    else if (m.events.some((e) => e.type === 'play' || e.type === 'discard')) ui.marks = { cards: new Set(), piles: new Set() };
+    for (const e of m.events) {
+      const who = names[e.p];
+      if (e.type === 'draw') {
+        log(e.from === 'deck' ? `${who} drew from the deck.` : `${who} took ${cname(e.card)} from the discards.`);
+        if (e.p !== m.seat && e.from !== 'deck') ui.marks.piles.add(e.from);
+      } else {
+        log(`${who} ${e.type === 'play' ? 'played' : 'discarded'} ${cname(e.card)}.`);
+        if (e.p !== m.seat) ui.marks.cards.add(e.card.id);
+      }
+    }
+  }
+  net.seq = m.seq;
+  if (state.over) { ui.summary = { last: m.round >= m.rounds }; render(); showSummary(); }
+  else { if (!overlay.hidden && overlay.className !== 'menu' && overlay.className !== 'rulesbox') closeOverlay(); render(); }
+  const mine = state.turn === m.seat && !state.over;
+  document.title = mine && document.hidden ? '● Your turn · Lost Cities' : 'Lost Cities';
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) document.title = 'Lost Cities'; });
+
+async function send(msg) {
+  ui.pending = true; syncSelection();
+  try { await api(`/api/rooms/${net.code}/act`, { method: 'POST', body: JSON.stringify({ token: net.token, ...msg }) }); }
+  catch (e) { ui.pending = false; toast(e.message); render(); }
 }
 
 // ---------- rendering ----------
@@ -147,11 +267,10 @@ function render() {
   if (!state) return;
   const v = view(), o = 1 - v, names = match.names;
   const reveal = state.over;
-  const hideMine = ui.curtain;
 
   // opponent bar
   const ob = $('#oppBar'); ob.innerHTML = '';
-  ob.append(el('div', 'nametag', `<span class="dot ${state.turn === o && !state.over ? 'on' : ''}"></span>${esc(names[o])}`));
+  ob.append(el('div', 'nametag', `<span class="dot ${dotClass(o)}"></span>${esc(names[o])}`));
   const oh = el('div', 'minihand');
   for (const c of reveal ? sortHand(state.hands[o]) : state.hands[o]) oh.append(reveal ? cardEl(c, 'mini') : backEl('mini'));
   ob.append(oh);
@@ -169,11 +288,10 @@ function render() {
 
   // my bar / hand
   const mb = $('#myBar'); mb.innerHTML = '';
-  mb.append(el('div', 'nametag', `<span class="dot ${state.turn === v && !state.over ? 'on' : ''}"></span>${esc(names[v])}`));
+  mb.append(el('div', 'nametag', `<span class="dot ${dotClass(v)}"></span>${esc(names[v])}`));
   const hand = el('div', 'hand');
   const cards = sortHand(state.hands[v]);
   for (const c of cards) {
-    if (hideMine) { hand.append(backEl()); continue; }
     const ce = cardEl(c);
     ce.draggable = myTurn() && state.phase === 'play';
     hand.append(ce);
@@ -183,6 +301,11 @@ function render() {
   side();
   syncSelection();
   fit();
+}
+
+function dotClass(p) {
+  if (online() && net?.connected && !net.connected[p]) return 'off';
+  return state.turn === p && !state.over ? 'on' : '';
 }
 
 function zone(p, color, cls) {
@@ -236,15 +359,21 @@ function side() {
   s.append(el('div', 'status', statusText()));
   s.append(el('div', 'log', ui.log.map((l, i) => `<div class="${i === 0 ? 'new' : ''}">${l}</div>`).join('')));
   const b = el('div', 'btns');
-  b.append(btn('Rules', showRules), btn('Menu', () => { botRun++; showMenu(true); }));
+  b.append(btn('Rules', () => showRules()), btn('Menu', () => { if (!online()) botRun++; showMenu(true); }));
   s.append(b);
 }
 const btn = (t, f) => { const b = el('button', 'btn small', t); b.onclick = f; return b; };
 
 function statusText() {
   if (state.over) return 'Round over';
-  if (ui.busy) return `<span class="think">${esc(match.names[1])} is thinking</span>`;
-  if (ui.curtain) return 'Waiting for the next player…';
+  if (online()) {
+    if (net?.lost) return 'Connection lost. Reconnecting…';
+    if (!net?.started) return 'Waiting for an opponent to join…';
+    const o = 1 - view();
+    if (state.turn !== view()) return net.connected?.[o] === false
+      ? `${esc(match.names[o])} disconnected. The game waits for them to come back.`
+      : `<span class="think">${esc(match.names[o])} is playing</span>`;
+  } else if (ui.busy) return `<span class="think">${esc(match.names[1])} is thinking</span>`;
   if (state.phase === 'play') {
     const sel = ui.selected && findInHand(state, state.turn, ui.selected);
     return sel
@@ -304,63 +433,105 @@ const overlay = $('#overlay');
 function openOverlay(html, cls = '') { overlay.className = cls; overlay.innerHTML = `<div class="panel">${html}</div>`; overlay.hidden = false; return overlay.firstChild; }
 function closeOverlay() { overlay.hidden = true; overlay.innerHTML = ''; }
 
-function showCurtain() {
-  const n = match.names[state.turn];
-  const p = openOverlay(`<h2>${esc(n)}'s turn</h2><p>Hand the device over. Hands stay hidden until you're ready.</p><button class="btn big" id="go">I'm ${esc(n)}: show my hand</button>`, 'curtain');
-  p.querySelector('#go').onclick = () => { ui.curtain = false; ui.view = state.turn; closeOverlay(); render(); };
+function showSummary() {
+  if (!ui.summary || !state.over) return;
+  const v = view(), o = 1 - v, names = match.names;
+  const bv = breakdown(state, v), bo = breakdown(state, o);
+  const cell = (x) => !x.started ? '<td class="none">–</td>' : `<td class="${x.score < 0 ? 'neg' : 'pos'}">${fmt(x.score)}<small>${x.count} cards${x.wagers ? ` · ×${1 + x.wagers}` : ''}${x.bonus ? ' · +20' : ''}</small></td>`;
+  const rows = COLORS.map((c, i) => `<tr><th class="k-${c}"><i style="background:${PALETTE[c].main}"></i>${SITES[c]}</th>${cell(bv[i])}${cell(bo[i])}</tr>`).join('');
+  const last = ui.summary.last;
+  let title = `Round ${match.round} complete`, extra = '';
+  if (last) {
+    const [tv, to] = [match.totals[v], match.totals[o]];
+    title = tv === to ? "It's a tie!" : tv > to ? (online() ? 'You win!' : `${esc(names[v])} wins!`) : `${esc(names[o])} wins!`;
+    extra = `<div class="final">Final score: ${tv} – ${to}</div>`;
+  }
+  let buttons;
+  if (online()) {
+    const mine = net?.ready?.[v], theirs = net?.ready?.[o];
+    buttons = mine
+      ? `<div class="wait">Waiting for ${esc(names[o])}…</div>`
+      : `<button class="btn big" id="next">${last ? 'Rematch' : 'Next round'}</button>${theirs ? `<div class="wait">${esc(names[o])} is ready</div>` : ''}`;
+    if (last) buttons += '<button class="btn" id="menu">Leave</button>';
+  } else {
+    buttons = last ? '<button class="btn big" id="again">Play again</button><button class="btn" id="menu">Menu</button>' : '<button class="btn big" id="next">Next round</button>';
+  }
+  const p = openOverlay(`<h2>${title}</h2>${extra}
+    <table class="sum"><thead><tr><th></th><th>${esc(names[v])}</th><th>${esc(names[o])}</th></tr></thead><tbody>${rows}
+    <tr class="tot"><th>This round</th><td>${fmt(roundScore(state, v))}</td><td>${fmt(roundScore(state, o))}</td></tr>
+    <tr class="tot"><th>Match total</th><td>${match.totals[v]}</td><td>${match.totals[o]}</td></tr></tbody></table>
+    <div class="row-btns">${buttons}</div>`, 'summary');
+  p.querySelector('#next')?.addEventListener('click', () => {
+    if (online()) { net.ready = net.ready.map((r, i) => (i === v ? true : r)); showSummary(); send({ type: 'ready' }); }
+    else { match.round++; match.starter = 1 - match.starter; startRound(); }
+  });
+  p.querySelector('#again')?.addEventListener('click', startMatch);
+  p.querySelector('#menu')?.addEventListener('click', () => { leaveOnline(); showMenu(false); });
 }
 
-function showSummary() {
-  if (!ui.summary) return;
-  const names = match.names, [a, b] = [0, 1];
-  const ba = breakdown(state, a), bb = breakdown(state, b);
-  const cell = (x) => !x.started ? '<td class="none">–</td>' : `<td class="${x.score < 0 ? 'neg' : 'pos'}">${fmt(x.score)}<small>${x.count} cards${x.wagers ? ` · ×${1 + x.wagers}` : ''}${x.bonus ? ' · +20' : ''}</small></td>`;
-  const rows = COLORS.map((c, i) => `<tr><th class="k-${c}"><i style="background:${PALETTE[c].main}"></i>${SITES[c]}</th>${cell(ba[i])}${cell(bb[i])}</tr>`).join('');
-  const [sa, sb] = ui.summary.scores;
-  let title = `Round ${match.round} complete`, extra = '';
-  if (ui.summary.last) {
-    const [ta, tb] = match.totals;
-    title = ta === tb ? "It's a tie!" : `${esc(names[ta > tb ? 0 : 1])} wins!`;
-    extra = `<div class="final">Final score: ${ta} – ${tb}</div>`;
-  }
-  const buttons = ui.summary.last
-    ? '<button class="btn big" id="again">Play again</button><button class="btn" id="menu">Menu</button>'
-    : '<button class="btn big" id="next">Next round</button>';
-  const p = openOverlay(`<h2>${title}</h2>${extra}
-    <table class="sum"><thead><tr><th></th><th>${esc(names[0])}</th><th>${esc(names[1])}</th></tr></thead><tbody>${rows}
-    <tr class="tot"><th>This round</th><td>${fmt(sa)}</td><td>${fmt(sb)}</td></tr>
-    <tr class="tot"><th>Match total</th><td>${match.totals[0]}</td><td>${match.totals[1]}</td></tr></tbody></table>
-    <div class="row-btns">${buttons}</div>`, 'summary');
-  p.querySelector('#next')?.addEventListener('click', () => { match.round++; match.starter = 1 - match.starter; startRound(); });
-  p.querySelector('#again')?.addEventListener('click', startMatch);
-  p.querySelector('#menu')?.addEventListener('click', () => showMenu(false));
+function showLobby() {
+  if (!net || net.started) return;
+  const link = `${location.origin}/r/${net.code}`;
+  const p = openOverlay(`<h2>Table ${net.code}</h2>
+    <p>Send this link to your opponent. The game starts as soon as they open it.</p>
+    <input id="lnk" readonly value="${esc(link)}" style="width:92%">
+    <div class="row-btns"><button class="btn big" id="copy">Copy link</button><button class="btn" id="leave">Leave</button></div>
+    <p class="hint wait"><span class="think">Waiting for an opponent</span></p>`, 'lobby');
+  const inp = p.querySelector('#lnk');
+  p.querySelector('#copy').onclick = async () => {
+    try { await navigator.clipboard.writeText(link); toast('Link copied'); } catch { inp.select(); document.execCommand?.('copy'); toast('Link copied'); }
+  };
+  inp.onclick = () => inp.select();
+  p.querySelector('#leave').onclick = () => { leaveOnline(true); showMenu(false); };
 }
 
 function seg(name, opts, cur) {
   return `<div class="seg" data-k="${name}">${opts.map(([v, l]) => `<button type="button" data-v="${v}" class="${String(cur) === String(v) ? 'on' : ''}">${l}</button>`).join('')}</div>`;
 }
 
-function showMenu(canResume) {
+function showMenu(canResume, joinCode = '') {
   const p = openOverlay(`
     <h1 class="title">Lost Cities</h1>
     <p class="tag">Mount expeditions to five lost sites. Every journey costs 20 points, so go deep or don't go at all.</p>
-    <label>Opponent</label>${seg('mode', [['bot', 'Computer'], ['hotseat', 'Two players, one device']], cfg.mode)}
-    <div id="botopts"><label>Bot skill</label>${seg('level', [['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']], cfg.level)}
-    <label>Your name</label><input id="nm" maxlength="14" value="${esc(cfg.name)}"></div>
+    <label>Play</label>${seg('mode', [['bot', 'Against the computer'], ['online', 'Online with a friend']], cfg.mode)}
+    <div id="botopts"><label>Bot skill</label>${seg('level', [['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']], cfg.level)}</div>
+    <label>Your name</label><input id="nm" maxlength="14" placeholder="${cfg.mode === 'online' ? 'Player' : 'You'}" value="${esc(cfg.name)}">
     <label>Rounds</label>${seg('rounds', [[1, 'Single round'], [3, 'Best of 3 rounds']], cfg.rounds)}
-    <div class="row-btns"><button class="btn big" id="start">New game</button>${canResume ? '<button class="btn" id="resume">Resume</button>' : ''}<button class="btn" id="rules">Rules</button></div>`, 'menu');
-  const sync = () => { p.querySelector('#botopts').style.display = cfg.mode === 'bot' ? '' : 'none'; };
+    <div id="onlopts"><div class="joinrow"><input id="code" maxlength="8" placeholder="Table code" value="${esc(joinCode)}"><button class="btn" id="join">Join</button></div>
+    <p class="hint" id="onlhint"></p></div>
+    <div class="row-btns"><button class="btn big" id="start"></button>${canResume ? '<button class="btn" id="resume">Resume</button>' : ''}<button class="btn" id="rules">Rules</button></div>`, 'menu');
+  const sync = () => {
+    p.querySelector('#botopts').style.display = cfg.mode === 'bot' ? '' : 'none';
+    p.querySelector('#onlopts').style.display = cfg.mode === 'online' ? '' : 'none';
+    p.querySelector('#start').textContent = cfg.mode === 'online' ? 'Create a table' : 'New game';
+    p.querySelector('#nm').placeholder = cfg.mode === 'online' ? 'Player' : 'You';
+  };
   sync();
-  p.querySelectorAll('.seg').forEach((s) => s.addEventListener('click', (e) => {
+  p.querySelectorAll('.seg').forEach((sg) => sg.addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
-    s.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
-    const k = s.dataset.k; cfg[k] = k === 'rounds' ? +b.dataset.v : b.dataset.v; sync();
+    sg.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    const k = sg.dataset.k; cfg[k] = k === 'rounds' ? +b.dataset.v : b.dataset.v; sync();
   }));
-  p.querySelector('#start').onclick = () => { cfg.name = p.querySelector('#nm').value; saveCfg(); startMatch(); };
-  p.querySelector('#rules').onclick = () => showRules(() => showMenu(canResume));
-  const r = p.querySelector('#resume');
-  if (r) r.onclick = () => { closeOverlay(); ui.busy = false; if (!hot() && state.turn === 1 && !state.over) runBot(); else render(); if (ui.curtain) showCurtain(); };
+  const grab = () => { cfg.name = p.querySelector('#nm').value; saveCfg(); };
+  p.querySelector('#start').onclick = () => { grab(); cfg.mode === 'online' ? createTable() : startMatch(); };
+  p.querySelector('#join').onclick = () => { grab(); const c = p.querySelector('#code').value.trim(); c ? joinTable(c) : toast('Enter the table code'); };
+  p.querySelector('#rules').onclick = () => showRules(() => showMenu(canResume, joinCode));
+  p.querySelector('#resume')?.addEventListener('click', () => {
+    closeOverlay();
+    if (online()) { showSummaryOrLobby(); return; }
+    ui.busy = false;
+    if (state.turn === 1 && !state.over) runBot(); else { render(); if (state.over) showSummary(); }
+  });
+  // online play needs the Node server; a static host (GitHub Pages) can't offer it
+  fetch('/api/ping').then((r) => r.json()).then(() => {}, () => {
+    if (!p.isConnected) return;
+    p.querySelector('#onlhint').textContent = 'Online play needs the game server (node server/server.js). It is not available on this site.';
+    p.querySelector('#onlhint').dataset.off = '1';
+    const seg0 = p.querySelector('.seg[data-k="mode"] button[data-v="online"]'); seg0.classList.add('dim');
+  });
 }
+
+function showSummaryOrLobby() { if (state?.over) showSummary(); else if (net && !net.started) showLobby(); }
 
 function showRules(back) {
   const p = openOverlay(`<h2>How to play</h2><div class="rules">
@@ -392,9 +563,10 @@ function fit() {
 addEventListener('resize', fit);
 fit();
 
-// boot: show a decorative idle board behind the menu
-match = { cfg, round: 1, totals: [0, 0], starter: 0, names: ['You', 'Bot'] };
+// boot: a decorative idle board behind the menu (or straight to joining an invite link)
+match = { cfg, round: 1, totals: [0, 0], starter: 0, names: ['You', 'Bot'], seat: 0 };
 state = newRound({});
-ui = { selected: null, curtain: true, busy: false, marks: { cards: new Set(), piles: new Set() }, log: [], view: 0 };
+ui = freshUi();
 render();
-showMenu(false);
+const invite = location.pathname.match(/^\/r\/([A-Za-z0-9]{3,8})$/);
+if (invite) { cfg.mode = 'online'; showMenu(false, invite[1].toUpperCase()); } else showMenu(false);

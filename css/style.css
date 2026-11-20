@@ -138,3 +138,12 @@ body{background:radial-gradient(ellipse at 50% 40%,#16303f 0,#0a1620 70%)}
 .final{font:700 16px var(--font);color:#7a5a12;margin-bottom:4px}
 #toast{position:absolute;left:50%;top:44%;transform:translate(-50%,0);padding:10px 18px;border-radius:10px;background:#0b1c26ee;border:1.5px solid var(--gold);color:var(--gold-l);font-size:15px;opacity:0;pointer-events:none;transition:opacity .25s;z-index:60;max-width:520px;text-align:center}
 #toast.on{opacity:1}
+
+/* online */
+.nametag .dot.off{background:#d9503f;box-shadow:0 0 8px #d9503f}
+.joinrow{display:flex;gap:8px;justify-content:center;margin-top:14px}
+.joinrow input{width:48%;text-transform:uppercase;letter-spacing:.2em}
+.panel .hint{font-size:13px;color:#6b5a30;font-style:italic;margin:8px 0 0}
+.wait{font:600 14px var(--font);color:#5b4d33;align-self:center}
+.seg button.dim{opacity:.55}
+.lobby .think::after,.panel .think::after{content:"";display:inline-block;width:1.2em;text-align:left;animation:dots 1.2s steps(4) infinite}
