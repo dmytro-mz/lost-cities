@@ -133,6 +133,7 @@ select.select option { color: #111; }
 .chip.code { font-weight: 800; letter-spacing: 0.15em; cursor: pointer; }
 .topbar .spacer { flex: 1; }
 .topbar .top-l, .topbar .top-r { display: contents; }
+.invite-btn { white-space: nowrap; flex: none; }
 .topbar .round-info { color: var(--muted); font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .conn-banner {
   position: fixed; top: calc(var(--top-h) + 8px); left: 50%; transform: translateX(-50%); z-index: 40; background: #7a2a1f;
@@ -175,16 +176,6 @@ aside.side { border-left: 2px solid #3b2513; background: rgba(10, 6, 3, 0.55); d
 
 /* ---------------------------------------------------------------- lobby */
 .lobby { height: 100%; overflow-y: auto; padding: 22px clamp(12px, 3vw, 32px) 40px; display: grid; gap: 18px; align-content: start; }
-.invite {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; padding: 18px 22px; border-radius: 16px; border: 1px solid #6b4a24;
-  background: linear-gradient(120deg, rgba(242, 194, 48, 0.14), rgba(179, 38, 27, 0.12));
-}
-.invite h2 { margin: 0 0 4px; font-size: 1.35rem; font-family: var(--serif); }
-.invite p { margin: 0; color: var(--muted); font-size: 0.95rem; }
-.invite .note { margin-top: 6px; font-size: 0.82rem; }
-.invite .link-box { display: flex; flex-wrap: wrap; gap: 8px; flex: 1; min-width: min(260px, 100%); }
-.invite .link-box input { min-width: 0; flex-basis: 180px; }
-.invite .link-box input { flex: 1; font-family: ui-monospace, monospace; font-size: 0.85rem; }
 .lobby-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 18px; align-items: start; }
 .lobby-col { display: grid; gap: 18px; min-width: 0; }
 .lobby-col .bot-grid { grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); }
@@ -615,6 +606,7 @@ aside.side { border-left: 2px solid #3b2513; background: rgba(10, 6, 3, 0.55); d
 }
 @media (max-width: 520px) {
   .topbar .brand { display: none; }
+  .invite-btn .invite-label { display: none; }
 }
 @media (max-width: 420px) {
   .topbar .icon-btn { width: 32px; }

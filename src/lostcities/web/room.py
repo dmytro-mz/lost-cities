@@ -277,6 +277,8 @@ class Room:
                 self._to_lobby()
             case "action":
                 self._human_action(member, msg.get("action"))
+            case "undo":
+                self._undo(member)
             case "ready":
                 self._ready(member)
             case "autoplay":
@@ -429,6 +431,22 @@ class Room:
             self.seats[seat].autoplay = False
         self._apply(seat, action)
 
+    def _undo(self, member: Member) -> None:
+        seat = self.seat_of(member.id)
+        if seat is None:
+            raise RoomError("You are watching this game")
+        game = self._game()
+        if self.seats[seat].autoplay:
+            raise RoomError("The autopilot is playing for you")
+        try:
+            events = game.undo(seat)
+        except IllegalMove as e:
+            raise RoomError(str(e)) from None
+        self._step += 1
+        for ev in events:
+            self._narrate(ev)
+        self._emit({"kind": "move", "seat": seat, "events": events})
+
     def _auto_move(self, seat: int) -> None:
         game = self._game()
         self._apply(seat, self._agent(seat).act(game.view(seat)))
@@ -487,6 +505,8 @@ class Room:
                     self._say(f"{name} pushes on to {SITES[card.color]} {card_tag(card.id)}", seat)
             case "discard":
                 self._say(f"{name} discards {card_tag(ev['card'])}", seat)
+            case "undo":
+                self._say(f"↩ {name} takes back {card_tag(ev['card'])}", seat)
             case "draw" if ev["source"] != actions.DECK_SOURCE:
                 self._say(f"{name} picks up {card_tag(ev['card'])}", seat)
             case "round_over":
@@ -695,6 +715,7 @@ class Room:
             "totals": game.totals,
             "history": [r.to_json() for r in game.history],
             "legal": [actions.to_json(a) for a in game.legal_actions(you)] if mine else [],
+            "can_undo": bool(mine and game.can_undo(you)),
             "result": dataclasses.asdict(game.result) if game.result else None,
             "time_left": None,
         }

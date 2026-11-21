@@ -1055,3 +1055,34 @@ def test_websocket_unknown_room_is_fatal() -> None:
     with TestClient(create_app(delay_scale=0.0)) as client, client.websocket_connect("/ws/ZZZZZ") as ws:
         msg = ws.receive_json()
         assert msg["type"] == "fatal" and "exist" in msg["message"]
+
+
+def test_undo_through_the_room():
+    room, inboxes = _room(humans=2)
+    host = inboxes[0].member_id
+    room.handle(host, {"type": "start"})
+    game = room.game
+    assert game is not None
+    current = inboxes[game.current]
+    other = inboxes[1 - game.current]
+    with pytest.raises(RoomError):
+        room.handle(current.member_id, {"type": "undo"})
+    state = _game(room.state_for(current.member_id))
+    assert state["can_undo"] is False
+    discard = next(a for a in state["legal"] if a["type"] == "discard")
+    room.handle(current.member_id, {"type": "action", "action": discard})
+    assert _game(room.state_for(current.member_id))["can_undo"] is True
+    assert _game(room.state_for(other.member_id))["can_undo"] is False
+    with pytest.raises(RoomError):
+        room.handle(other.member_id, {"type": "undo"})
+    room.handle(current.member_id, {"type": "undo"})
+    state = _game(room.state_for(current.member_id))
+    assert discard["card"] in state["hand"] and state["phase"] == "play" and not state["can_undo"]
+    assert other.last_state["event"]["events"][0] == {
+        "kind": "undo",
+        "seat": game.current,
+        "card": discard["card"],
+        "color": discard["card"].split("-")[0],
+        "from": "discard",
+    }
+    assert any("takes back" in e["text"] for e in room.log)

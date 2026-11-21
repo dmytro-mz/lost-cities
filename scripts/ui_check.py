@@ -39,6 +39,10 @@ async def my_move(page: Page, rng: random.Random) -> bool:
     if "mine" not in (status or ""):
         return False
     drawables = page.locator(".deck.drawable, .slot.drawable")
+    undo = page.locator(".status .btn.undo")
+    if await undo.count() and rng.random() < 0.2:
+        await undo.first.click(force=FORCE)
+        return True
     if await drawables.count():
         await drawables.nth(rng.randrange(await drawables.count())).click(force=FORCE)
         return True

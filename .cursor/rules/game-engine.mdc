@@ -10,6 +10,8 @@ alwaysApply: false
 - Turn = PLAY (`Play` onto your expedition or `Discard`) then DRAW (`Draw("deck")` or `Draw(color)`), never from
   `last_discard`. The round ends right after the draw that empties the deck → ROUND_OVER (`next_round()`), or
   GAME_OVER after `Game.rounds` rounds. Next round: the higher round score starts; on a tie, whoever didn't start.
+- `Game.undo(seat)` takes back the turn's play/discard while still in DRAW (`can_undo`); it is not an `Action`,
+  so bots and `legal_actions` never see it. The room exposes it as `{"type": "undo"}` and `game.can_undo`.
 - Scoring: `(sum − 20) × (1 + wagers)`, +20 (not multiplied) for ≥ 8 cards; unstarted expedition = 0.
 - `legal_actions(seat)` is the single source of truth; `step` raises `IllegalMove` and leaves state untouched.
 - `Game.check()` holds after every step: all 60 cards exactly once, expeditions ascend with wagers first, hand sizes.

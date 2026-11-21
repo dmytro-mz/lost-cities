@@ -290,6 +290,7 @@ function playSounds(events, st) {
       else if (n === BONUS_CARDS) sfx.bonus();
       else sfx.play();
     } else if (e.kind === "discard") sfx.discard();
+    else if (e.kind === "undo") sfx.draw();
     else if (e.kind === "draw") setTimeout(sfx.draw, 120);
     else if (e.kind === "round_over") setTimeout(sfx.round, 500);
   }
@@ -409,6 +410,13 @@ function flip(before, events, st) {
     el.classList.add("fresh");
   }
   for (const ev of events) {
+    if (ev.kind === "undo") {
+      // A taken-back card leaves the table; if its new spot in a hand isn't on screen, fly a copy there.
+      const old = before.map.get(ev.card);
+      const target = ev.seat === oppSeat ? oppNow : $("#hand")?.getBoundingClientRect();
+      if (old && !present.has(ev.card)) flyClone(old.node, old.rect, target);
+      continue;
+    }
     if (ev.kind !== "draw") continue;
     if (ev.seat === oppSeat && st.you.seat != null) {
       if (ev.source === "deck") flyClone(cardBack(), before.deck, oppNow);
@@ -558,7 +566,15 @@ function renderTop() {
   let info = "";
   if (st?.status === "lobby") info = "Lobby";
   else if (g) info = `Round ${g.round} of ${g.rounds} · ${g.deck_left} cards in the deck`;
-  const before = [h("span", { class: "brand", title: "Home", onclick: leaveTable }, "Lost Cities"), h("span", { class: "chip code", title: "Copy table code", onclick: copyCode }, "📋 ", S.code), h("span", { class: "round-info" }, info), h("span", { class: "spacer" }), g ? iconBtn("📊", "Scores", showScores) : null, iconBtn("❓", "How to play", showRules)].filter(Boolean);
+  const before = [
+    h("span", { class: "brand", title: "Home", onclick: leaveTable }, "Lost Cities"),
+    h("span", { class: "chip code", title: "Copy table code", onclick: copyCode }, "📋 ", S.code),
+    h("span", { class: "round-info" }, info),
+    h("span", { class: "spacer" }),
+    st?.status === "lobby" ? h("button", { class: "btn primary small invite-btn", title: `Copy the invite link (${inviteUrl()})`, onclick: copyInvite }, "🔗 ", h("span", { class: "invite-label" }, "Copy invite link")) : null,
+    g ? iconBtn("📊", "Scores", showScores) : null,
+    iconBtn("❓", "How to play", showRules),
+  ].filter(Boolean);
   const after = [iconBtn("💬", "Log & players", toggleSide, "only-narrow", S.ui.unread), iconBtn("⋯", "Menu", toggleMenu)];
   if (volumeControl.parentNode !== top) top.replaceChildren(h("span", { class: "top-l" }), volumeControl, h("span", { class: "top-r" }));
   morph(top.firstChild, before);
@@ -828,19 +844,6 @@ function renderLobby(st, main) {
   const mySeat = st.you.seat;
   const n = st.seats.length;
   const hostName = st.seats.find((s) => s.member === st.host)?.name || st.spectators.find((s) => s.member === st.host)?.name || "the host";
-  const local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
-  let note = null;
-  if (!S.config.public_url) {
-    if (local && !S.config.lan_url) note = "This link only works on this computer. Restart with `uv run lostcities serve --tunnel` to invite someone over the internet.";
-    else if (!location.hostname.endsWith("trycloudflare.com")) note = "Works for people on the same network. For friends elsewhere, run `uv run lostcities serve --tunnel`.";
-  }
-  const linkInput = h("input", { class: "text", readonly: true, value: inviteUrl(), onclick: (e) => e.target.select() });
-  const invite = h(
-    "div",
-    { class: "invite" },
-    h("div", {}, h("h2", {}, "Find a rival explorer"), h("p", {}, "Send this link to your opponent, or play against a bot."), note ? h("p", { class: "note" }, "ℹ️ ", note) : null),
-    h("div", { class: "link-box" }, linkInput, h("button", { class: "btn primary", onclick: copyInvite }, "Copy link"), navigator.share ? h("button", { class: "btn", onclick: () => navigator.share({ title: "Play Lost Cities with me", url: inviteUrl() }).catch(() => {}) }, "Share") : null),
-  );
   const seatRows = [];
   st.seats.forEach((s, i) => {
     const bot = s.bot ? botInfo(s.bot) : null;
@@ -944,7 +947,7 @@ function renderLobby(st, main) {
   const actions = isHost
     ? h("div", { class: "lobby-actions" }, h("button", { class: "btn", disabled: n < 2, onclick: () => send({ type: "swap" }) }, "🔀 Swap seats"), h("button", { class: "btn primary big", disabled: n < 2, onclick: () => send({ type: "start" }) }, n < 2 ? "Waiting for an opponent" : "🧭 Set out!"))
     : h("div", { class: "lobby-actions" }, h("span", { class: "waiting" }, `Waiting for ${hostName} to start the game…`));
-  morph(main, h("section", { class: "lobby", id: "lobby" }, invite, h("div", { class: "lobby-grid" }, seatsPanel, h("div", { class: "lobby-col" }, botsPanel, settingsPanel)), actions));
+  morph(main, h("section", { class: "lobby", id: "lobby" }, h("div", { class: "lobby-grid" }, seatsPanel, h("div", { class: "lobby-col" }, botsPanel, settingsPanel)), actions));
 }
 
 // ------------------------------------------------------------------ game view
@@ -1188,9 +1191,16 @@ function renderStatus(st, panel) {
     if (canPlay(g, sel)) buttons.push(h("button", { class: "btn primary small", onclick: () => act({ type: "play", card: sel }) }, `▲ ${ids.length ? "Add to" : "Start"} ${SITE[card.color]}`, h("small", { style: { opacity: 0.8 } }, ` ${before.started ? signed(before.score) : "0"} → ${signed(after.score)}${before.started ? ` (${signed(delta)})` : ""}`)));
     buttons.push(h("button", { class: "btn small", onclick: () => act({ type: "discard", card: sel }) }, "▼ Discard"));
   }
+  if (g.can_undo && !S.ui.pending) buttons.push(h("button", { class: "btn small undo", onclick: takeBack, title: "Take back your card and choose again (U)" }, "↩ Take back"));
   if (st.settings.hints && cls === "mine") buttons.push(h("button", { class: "btn small ghost", onclick: () => send({ type: "hint" }), title: "Ask the bot (H)" }, "💡 Hint"));
   const showText = panel || !(isMine(st, "play") && sel);
   return h("div", { class: `status ${panel ? "panel" : "line"} ${cls}` }, showText ? h("span", { class: "stext" }, text) : null, buttons.length ? h("div", { class: "sbtns" }, buttons) : null, h("div", { class: "timer", id: "timer" }));
+}
+
+function takeBack() {
+  S.ui.pending = true;
+  closePopover();
+  send({ type: "undo" });
 }
 
 function peekPile(color, anchorEl) {
@@ -1442,6 +1452,9 @@ document.addEventListener("keydown", (e) => {
       e.preventDefault();
       act({ type: "discard", card: S.ui.sel });
     }
+  } else if (g.can_undo && (k === "u" || k === "Backspace")) {
+    e.preventDefault();
+    takeBack();
   } else if (isMine(st, "draw") && (k === " " || k === "Enter")) {
     e.preventDefault();
     act({ type: "draw", source: "deck" });

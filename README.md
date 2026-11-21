@@ -19,7 +19,7 @@ wagers — and don't start what you can't finish. Bots can take the other seat.
   each round ends with a full breakdown, both hands revealed.
 - **Play a friend or a bot**: invite over your Wi-Fi or with a public link. Players can reconnect, move their seat to
   another device, or hand it to the autopilot if they drop out. Spectators welcome.
-- **Table extras**: chat and emoji reactions, synthesised sounds, hints, an optional turn timer, optional "look
+- **Table extras**: take back your play or discard until you draw, chat and emoji reactions, synthesised sounds, hints, an optional turn timer, optional "look
   through the discard piles", keyboard controls, drag and drop, phone layout.
 - **Fair play**: the server holds the game state and checks every move. Your hand and the card you draw from the
   deck are never sent to your opponent.

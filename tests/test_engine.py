@@ -590,3 +590,66 @@ def test_view_last_discard_and_hand_sorted():
     assert v.last_discard == card.color
     assert v.discards[card.color][-1] == card
     assert len(v.hand) == 7
+
+
+# ---------------------------------------------------------------- take-backs
+@pytest.mark.parametrize("kind", ["play", "discard"])
+def test_undo_restores_the_turn(kind):
+    game = Game(seed=11)
+    seat = game.current
+    before = snapshot(game)
+    legal = [a for a in game.legal_actions(seat) if type(a).__name__.lower() == kind]
+    action = legal[0]
+    game.step(seat, action)
+    assert game.can_undo(seat) and not game.can_undo(1 - seat)
+    events = game.undo(seat)
+    assert events == [
+        {"kind": "undo", "seat": seat, "card": action.card, "color": CARDS[action.card].color, "from": kind}
+    ]
+    game.check()
+    assert game.phase == Phase.PLAY and game.current == seat and not game.can_undo(seat)
+    after = snapshot(game)
+    assert sorted(after.pop("hands")[seat], key=lambda c: c.id) == sorted(before.pop("hands")[seat], key=lambda c: c.id)
+    assert after == before
+
+
+def test_undone_discard_returns_to_hand_and_lifts_the_pile_ban():
+    game = Game(seed=4)
+    seat = game.current
+    card = game.hands[seat][0]
+    game.step(seat, Discard(card.id))
+    assert game.last_discard == card.color and game.discards[card.color] == [card]
+    game.undo(seat)
+    assert card in game.hands[seat] and game.discards[card.color] == [] and game.last_discard is None
+    assert Discard(card.id) in game.legal_actions(seat)
+    game.check()
+
+
+def test_no_undo_after_the_draw_or_before_playing():
+    game = Game(seed=2)
+    seat = game.current
+    with pytest.raises(IllegalMove):
+        game.undo(seat)
+    game.step(seat, game.legal_actions(seat)[0])
+    with pytest.raises(IllegalMove):
+        game.undo(1 - seat)
+    game.step(seat, Draw("deck"))
+    assert not game.can_undo(seat)
+    with pytest.raises(IllegalMove):
+        game.undo(seat)
+
+
+def test_random_games_with_undos_keep_invariants():
+    rng = random.Random(9)
+    for seed in range(5):
+        game = Game(rounds=2, seed=seed)
+        while game.phase != Phase.GAME_OVER:
+            if game.phase == Phase.ROUND_OVER:
+                game.next_round()
+                continue
+            seat = game.current
+            if game.can_undo(seat) and rng.random() < 0.3:
+                game.undo(seat)
+            else:
+                game.step(seat, rng.choice(game.legal_actions(seat)))
+            game.check()

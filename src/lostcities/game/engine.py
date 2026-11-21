@@ -1,7 +1,8 @@
 """The game state machine: a match of one or more rounds between two players.
 
 A turn is two steps: PLAY (lay a card on your expedition or discard it) then DRAW (from the deck or the top of a
-discard pile, but not the card you just discarded). A round ends the moment the last deck card is drawn; then
+discard pile, but not the card you just discarded). Until the draw, the first step can be taken back (`undo`).
+A round ends the moment the last deck card is drawn; then
 ROUND_OVER until `next_round()`, or GAME_OVER after the last round.
 """
 
@@ -92,6 +93,7 @@ class Game:
     history: list[RoundResult] = field(init=False, default_factory=list)
     result: Result | None = field(init=False, default=None)
     round_starter: int = field(init=False, default=0)
+    pending: tuple[str, Card] | None = field(init=False, default=None)  # this turn's play/discard, until the draw
 
     def __post_init__(self) -> None:
         if self.rounds < 1:
@@ -115,6 +117,7 @@ class Game:
         self.phase = Phase.PLAY
         self.last_discard = None
         self.turn = 0
+        self.pending = None
 
     @property
     def round_no(self) -> int:
@@ -168,6 +171,7 @@ class Game:
                 expedition.append(card)
                 self.last_discard = None
                 self.phase = Phase.DRAW
+                self.pending = ("play", card)
                 return [{"kind": "play", "seat": seat, "card": card.id, "color": card.color}]
             case Discard(card_id) if self.phase == Phase.PLAY:
                 card = self._card_in_hand(seat, card_id)
@@ -175,10 +179,29 @@ class Game:
                 self.discards[card.color].append(card)
                 self.last_discard = card.color
                 self.phase = Phase.DRAW
+                self.pending = ("discard", card)
                 return [{"kind": "discard", "seat": seat, "card": card.id, "color": card.color}]
             case Draw(source) if self.phase == Phase.DRAW:
                 return self._draw(seat, source)
         raise IllegalMove("First play or discard a card, then draw one" if self.phase == Phase.PLAY else "Draw a card")
+
+    def can_undo(self, seat: int | None) -> bool:
+        return seat == self.current and self.phase == Phase.DRAW and self.pending is not None
+
+    def undo(self, seat: int) -> list[Event]:
+        """Take back this turn's play or discard (only before drawing): the card returns to the hand."""
+        if not self.can_undo(seat):
+            raise IllegalMove("There is nothing to take back")
+        assert self.pending is not None
+        kind, card = self.pending
+        pile = self.expeditions[seat][card.color] if kind == "play" else self.discards[card.color]
+        assert pile and pile[-1] == card
+        pile.pop()
+        self.hands[seat].append(card)
+        self.last_discard = None
+        self.pending = None
+        self.phase = Phase.PLAY
+        return [{"kind": "undo", "seat": seat, "card": card.id, "color": card.color, "from": kind}]
 
     def _draw(self, seat: int, source: str) -> list[Event]:
         if source == DECK_SOURCE:
@@ -194,6 +217,7 @@ class Game:
             card = pile.pop()
         self.hands[seat].append(card)
         self.last_discard = None
+        self.pending = None
         self.turn += 1
         events: list[Event] = [
             {"kind": "draw", "seat": seat, "source": source, "card": card.id, "deck_left": len(self.deck)}
