@@ -20,10 +20,15 @@ alwaysApply: false
 
 ## Client (`static/`, no build step, no frameworks)
 
-- `dom.js` `h()` / `s()` build HTML / SVG and skip `null` children.
+- `dom.js` `h()` / `s()` build HTML / SVG and skip `null` children. Screens re-render through `morph(parent, nodes)`,
+  which patches the existing DOM (matching children by `data-key` / `id`, else by order) instead of replacing it,
+  so a settings switch or a card selection only touches what changed. Never `replaceChildren` a live view.
 - `art.js` all artwork as `<symbol>`s in one hidden SVG: per-site landscapes and cities (the city grows with the
   value), the wager scene, emblems, the card back. `cardFace(id)` / `cardBack()` return elements.
 - `app.js` home, lobby, the table (CSS grid: side column + 5 colour columns; rows: rival lanes, camp, your lanes),
   hand with click / drag / keyboard, FLIP animations keyed by `data-key` = card id, round summary overlay.
-  Card sizes are CSS variables computed in `layout()` from the available space.
+  Card sizes are CSS variables computed in `computeLayout()` from the window size only, never from the number of
+  cards out: each expedition strip is a fixed `LANE` card heights tall and longer expeditions stack tighter.
+  Modes: landscape (turn prompt in the side column when it fits, else above the hand), `short`, and `portrait`
+  (phones: 5 columns, plates and deck as rows). `scripts/ui_check.py --size WxH` asserts nothing gets rebuilt.
 - `sound.js` synthesised effects.

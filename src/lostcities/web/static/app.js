@@ -1,5 +1,5 @@
 import { COLORS, SEAT_FILL, SITE, cardBack, cardFace, emblem, installArt, parseCard, richText } from "./art.js";
-import { copyText, h, openDialog, toast } from "./dom.js";
+import { copyText, h, morph, openDialog, toast } from "./dom.js";
 import { getVolume, isMuted, setMuted, setVolume, sfx, unlockAudio } from "./sound.js";
 
 const MAX_SEATS = 2;
@@ -531,12 +531,13 @@ function renderTop() {
   else if (g) info = `Round ${g.round} of ${g.rounds} · ${g.deck_left} cards in the deck`;
   const before = [h("span", { class: "brand", title: "Home", onclick: leaveTable }, "Lost Cities"), h("span", { class: "chip code", title: "Copy table code", onclick: copyCode }, "📋 ", S.code), h("span", { class: "round-info" }, info), h("span", { class: "spacer" }), g ? iconBtn("📊", "Scores", showScores) : null, iconBtn("❓", "How to play", showRules)].filter(Boolean);
   const after = [iconBtn("💬", "Log & players", toggleSide, "only-narrow", S.ui.unread), iconBtn("⋯", "Menu", toggleMenu)];
-  if (volumeControl.parentNode !== top) top.append(volumeControl);
-  for (const el of [...top.children]) if (el !== volumeControl) el.remove();
-  volumeControl.before(...before);
-  volumeControl.after(...after);
-  document.getElementById("menu")?.remove();
-  if (S.ui.menu) document.body.append(renderMenu());
+  if (volumeControl.parentNode !== top) top.replaceChildren(h("span", { class: "top-l" }), volumeControl, h("span", { class: "top-r" }));
+  morph(top.firstChild, before);
+  morph(top.lastChild, after);
+  const menu = document.getElementById("menu");
+  if (!S.ui.menu) menu?.remove();
+  else if (menu) morph(menu, [...renderMenu().childNodes]);
+  else document.body.append(renderMenu());
 }
 
 function toggleMenu() {
@@ -790,7 +791,7 @@ function renderPlayers(st) {
     );
   });
   const watching = st.spectators.filter((s) => s.connected);
-  box.replaceChildren(...rows, watching.length ? h("div", { class: "pl-sub", style: { padding: "0 6px" } }, `👀 Watching: ${watching.map((s) => s.name).join(", ")}`) : "");
+  morph(box, [rows, watching.length ? h("div", { class: "pl-sub", style: { padding: "0 6px" } }, `👀 Watching: ${watching.map((s) => s.name).join(", ")}`) : null]);
 }
 
 function renderLobby(st, main) {
@@ -914,7 +915,7 @@ function renderLobby(st, main) {
   const actions = isHost
     ? h("div", { class: "lobby-actions" }, h("button", { class: "btn", disabled: n < 2, onclick: () => send({ type: "swap" }) }, "🔀 Swap seats"), h("button", { class: "btn primary big", disabled: n < 2, onclick: () => send({ type: "start" }) }, n < 2 ? "Waiting for an opponent" : "🧭 Set out!"))
     : h("div", { class: "lobby-actions" }, h("span", { class: "waiting" }, `Waiting for ${hostName} to start the game…`));
-  main.replaceChildren(h("section", { class: "lobby" }, invite, h("div", { class: "lobby-grid" }, seatsPanel, h("div", { class: "lobby-col" }, botsPanel, settingsPanel)), actions));
+  morph(main, h("section", { class: "lobby", id: "lobby" }, invite, h("div", { class: "lobby-grid" }, seatsPanel, h("div", { class: "lobby-col" }, botsPanel, settingsPanel)), actions));
 }
 
 // ------------------------------------------------------------------ game view
@@ -925,34 +926,78 @@ function isMine(st, phase) {
 const canPlay = (g, id) => legalOf(g, "play").some((a) => a.card === id);
 const canDrawFrom = (g, source) => legalOf(g, "draw").some((a) => a.source === source);
 
-function layout(st) {
-  const game = $("#game");
-  if (!game) return;
+// Card sizes depend on the window only, never on how many cards are out: each expedition gets a fixed
+// strip of the table and longer expeditions just stack tighter inside it.
+const LANE = 2.2; // expedition strip height, in card heights (12 cards still show their numbers)
+const CAMP = 1.35; // camp board height, in card heights
+const HAND_K = 1.1; // hand cards vs table cards
+const HAND_SHOW = 0.8; // how much of a hand card sticks up from the bottom edge
+const LONGEST = 12;
+
+function computeLayout(st) {
+  const main = $("#main");
+  const W = main?.clientWidth || innerWidth;
+  const H = main?.clientHeight || innerHeight;
   const g = st.game;
-  const W = game.clientWidth;
-  const H = game.clientHeight;
-  const longest = Math.max(1, ...[0, 1].flatMap((s) => COLORS.map((c) => g.expeditions[s][c].length)));
-  const L = Math.max(4, longest);
-  const handFixed = 96;
-  const stepK = 0.2;
-  const units = 2 * (1 + (L - 1) * stepK) + 1.32 + 1.12;
-  let ch = (H - handFixed - 16) / units;
-  let cw = Math.min(ch / 1.4, (W - 28) / 7.25, 118);
-  cw = Math.max(34, cw);
-  ch = cw * 1.4;
-  const hcw = Math.min(cw * 1.12, 132);
-  // Squeeze the overlap step if the columns would not fit.
-  const laneAvail = (H - handFixed - 16 - hcw * 1.4 - ch * 1.32) / 2;
-  const step = Math.max(ch * 0.13, Math.min(ch * stepK, (laneAvail - ch) / Math.max(1, L - 1)));
-  const laneH = ch + (L - 1) * step;
-  const handW = W - 20;
+  const portrait = W < 720 && H > W * 1.15;
+  const handRows = (ch) => HAND_K * HAND_SHOW * ch;
+  let cw;
+  let lw = 0;
+  let fixed;
+  let sidePanel = false;
+  if (portrait) {
+    fixed = 8 + 62 + 46 + 46 + 18;
+    const byW = (W - 20) / 5.56;
+    const byH = (H - fixed) / ((2 * LANE + CAMP + HAND_K * HAND_SHOW) * 1.4);
+    cw = Math.min(byW, Math.max(byH, byW * 0.8));
+  } else {
+    fixed = 8 + 18 + 6;
+    let byH = (H - fixed) / ((2 * LANE + CAMP + HAND_K * HAND_SHOW) * 1.4);
+    const byW = (W - 24) / 6.95;
+    cw = Math.min(byH, byW);
+    // The turn prompt goes into the side column when there's room for it, else above the hand.
+    lw = Math.min(200, Math.max(cw * 1.25, (W - 24 - cw * 5.7) * 0.5));
+    sidePanel = lw >= 150 && H >= 560;
+    if (!sidePanel) {
+      fixed += 46;
+      byH = (H - fixed) / ((2 * LANE + CAMP + HAND_K * HAND_SHOW) * 1.4);
+      cw = Math.min(byH, byW);
+      lw = Math.min(Math.max(cw * 1.25, 120), Math.max(cw * 1.25, (W - 24 - cw * 5.7) * 0.5));
+    }
+  }
+  cw = Math.max(34, Math.min(cw, 140));
+  const ch = cw * 1.4;
+  const gap = cw * 0.14;
+  const room = H - fixed - CAMP * ch - handRows(ch);
+  const laneH = Math.max(ch * 1.4, Math.min(ch * (1 + (LONGEST - 1) * 0.2), room / 2));
+  const longest = Math.max(1, ...[0, 1].flatMap((seat) => COLORS.map((c) => g.expeditions[seat][c].length)));
+  const step = Math.max(ch * 0.06, Math.min(ch * 0.2, (laneH - ch) / Math.max(1, longest - 1)));
+  const hcw = cw * HAND_K;
+  const shift = portrait ? 0 : lw + gap;
+  const handW = Math.max(hcw * 2, W - 20 - shift);
   const n = Math.max(1, (g.hand || []).length || 8);
   const overlap = n * hcw + (n - 1) * 6 > handW ? (n * hcw - handW) / (n - 1) : -6;
-  const vars = { "--cw": `${cw}px`, "--ch": `${ch}px`, "--step": `${step}px`, "--lane-h": `${laneH}px`, "--hcw": `${hcw}px`, "--hch": `${hcw * 1.4}px`, "--overlap": `${overlap}px`, "--gap": `${cw * 0.14}px`, "--lw": `${cw * 1.25}px`, "--camp-pad": `${ch * 0.09}px` };
-  for (const [k, v] of Object.entries(vars)) game.style.setProperty(k, v);
+  const px = (v) => `${Math.round(v * 100) / 100}px`;
+  const vars = {
+    "--cw": px(cw),
+    "--ch": px(ch),
+    "--step": px(step),
+    "--lane-h": px(laneH),
+    "--hcw": px(hcw),
+    "--hch": px(hcw * 1.4),
+    "--hand-show": HAND_SHOW,
+    "--overlap": px(overlap),
+    "--gap": px(gap),
+    "--lw": px(lw),
+    "--hand-shift": px(shift),
+    "--camp-pad": px(ch * 0.08),
+    "--dw": px(portrait ? cw * 0.62 : cw),
+  };
+  return { vars, portrait, sidePanel, short: !portrait && H < 560 };
 }
+
 window.addEventListener("resize", () => {
-  if (S.state?.game && S.state.status !== "lobby") layout(S.state);
+  if (S.state?.game && S.state.status !== "lobby") render();
 });
 
 function plate(st, seat, where) {
@@ -968,7 +1013,7 @@ function plate(st, seat, where) {
           Array.from({ length: g.hand_sizes[seat] }, () => cardBack()),
         )
       : null;
-  return h("div", { class: `plate ${current ? "current" : ""}`, "data-seat": seat }, mini, h("span", { class: "pname" }, s.bot ? "🤖 " : "", s.name), h("span", { class: "ptotal" }, g.totals[seat] + (st.status === "playing" ? 0 : 0), h("small", {}, "TOTAL")));
+  return h("div", { class: `plate ${where} ${current ? "current" : ""}`, "data-seat": seat }, mini, h("span", { class: "pname" }, s.bot ? "🤖 " : "", s.name), h("span", { class: "ptotal" }, g.totals[seat], h("small", {}, "TOTAL")));
 }
 
 function renderGame(st, main) {
@@ -980,24 +1025,23 @@ function renderGame(st, main) {
   const sel = S.ui.sel;
   const selCard = sel ? parseCard(sel) : null;
   const hint = S.ui.hint;
+  const L = computeLayout(st);
 
   const lane = (seat, color) => {
     const ids = g.expeditions[seat][color];
     const isMe = seat === me;
     const target = isMe && mine && selCard?.color === color && canPlay(g, sel);
     const hinted = isMe && hint?.type === "play" && parseCard(hint.card).color === color;
-    const el = h(
+    return h(
       "div",
       {
-        class: `lane ${isMe ? "me" : "opp"} c-${color} ${target ? "target" : ""} ${hinted ? "hint" : ""}`,
+        class: `lane ${isMe ? "me" : "opp"} k${COLORS.indexOf(color)} c-${color} ${target ? "target" : ""} ${hinted ? "hint" : ""}`,
         "data-drop": isMe ? `play:${color}` : null,
-        style: { gridRow: isMe ? 3 : 1, gridColumn: COLORS.indexOf(color) + 2 },
         onclick: target ? () => act({ type: "play", card: sel }) : null,
       },
       ids.map((id, i) => cardFace(id, { "data-key": id, style: { "--i": i } })),
       target ? h("div", { class: "ghost", style: { "--i": ids.length } }, "▲") : null,
     );
-    return el;
   };
 
   const slot = (color) => {
@@ -1040,12 +1084,13 @@ function renderGame(st, main) {
     Array.from({ length: Math.min(4, Math.ceil(deckN / 8)) }, (_, i) => cardBack({ style: { transform: `translate(${-i * 1.5}px, ${-i * 1.5}px)` } })),
   );
 
+  const status = renderStatus(st, L.sidePanel);
   const grid = h(
     "div",
     { class: "tgrid" },
     h("div", { class: "side-l r1" }, plate(st, opp, "opp")),
     h("div", { class: "side-l r2" }, deck, h("span", { class: `deck-count ${deckN <= 8 ? "low" : ""}` }, `${deckN} left`)),
-    h("div", { class: "side-l r3" }, plate(st, me, "me")),
+    h("div", { class: "side-l r3" }, L.sidePanel ? status : null, plate(st, me, "me")),
     COLORS.map((c) => lane(opp, c)),
     h("div", { class: "camp" }, COLORS.map(slot)),
     COLORS.map((c) => lane(me, c)),
@@ -1080,24 +1125,15 @@ function renderGame(st, main) {
     );
   }
 
-  const actions = h("div", { class: "hand-actions" });
-  if (mine && selCard) {
-    const ids = g.expeditions[me][selCard.color];
-    const before = scoreOf(ids);
-    const after = scoreOf([...ids, sel]);
-    const delta = after.score - before.score;
-    if (canPlay(g, sel)) actions.append(h("button", { class: "btn primary small", onclick: () => act({ type: "play", card: sel }) }, `▲ ${ids.length ? "Add to" : "Start"} ${SITE[selCard.color]}`, h("small", { style: { opacity: 0.8 } }, ` ${before.started ? signed(before.score) : "0"} → ${signed(after.score)}${before.started ? ` (${signed(delta)})` : ""}`)));
-    actions.append(h("button", { class: "btn small", onclick: () => act({ type: "discard", card: sel }) }, `▼ Discard`));
-  }
-
-  main.replaceChildren(h("section", { class: "game", id: "game" }, h("div", { class: "board" }, grid), h("div", { class: "hand-zone" }, renderStatus(st), hand, actions)));
-  layout(st);
+  const cls = `game ${L.portrait ? "portrait" : "landscape"} ${L.short ? "short" : ""}`;
+  morph(main, h("section", { class: cls, id: "game", style: L.vars }, h("div", { class: "board" }, grid), h("div", { class: "hand-zone" }, L.sidePanel ? null : status, hand)));
 }
 
-function renderStatus(st) {
+function renderStatus(st, panel) {
   const g = st.game;
   const me = st.you.seat;
   const cur = g.current;
+  const sel = S.ui.sel;
   let text;
   let cls = "";
   if (st.status === "round_over") text = `🏁 Round ${g.round} is over`;
@@ -1105,7 +1141,7 @@ function renderStatus(st) {
   else if (cur === me && st.seats[me]?.autoplay) text = "🤖 The autopilot is playing for you";
   else if (cur === me && g.phase === "play") {
     cls = "mine";
-    text = S.ui.sel ? `Play it on your ${SITE[parseCard(S.ui.sel).color]} expedition ▲ or discard it ▼` : "Your turn: play a card or discard one";
+    text = sel ? `Play it on your ${SITE[parseCard(sel).color]} expedition ▲ or discard it ▼` : "Your turn: play a card or discard one";
   } else if (cur === me && g.phase === "draw") {
     cls = "mine";
     text = "Now draw: the deck or the top of a discard pile";
@@ -1113,8 +1149,19 @@ function renderStatus(st) {
     const name = seatName(st, cur);
     text = g.phase === "play" ? `${name} is choosing a card…` : `${name} is drawing…`;
   }
-  const hintBtn = st.settings.hints && cls === "mine" ? h("button", { class: "btn small", onclick: () => send({ type: "hint" }), title: "Ask the bot (H)" }, "💡 Hint") : null;
-  return h("div", { class: `status-line ${cls}` }, h("span", { class: "stext" }, text), hintBtn, h("div", { class: "timer", id: "timer" }));
+  const buttons = [];
+  if (isMine(st, "play") && sel) {
+    const card = parseCard(sel);
+    const ids = g.expeditions[me][card.color];
+    const before = scoreOf(ids);
+    const after = scoreOf([...ids, sel]);
+    const delta = after.score - before.score;
+    if (canPlay(g, sel)) buttons.push(h("button", { class: "btn primary small", onclick: () => act({ type: "play", card: sel }) }, `▲ ${ids.length ? "Add to" : "Start"} ${SITE[card.color]}`, h("small", { style: { opacity: 0.8 } }, ` ${before.started ? signed(before.score) : "0"} → ${signed(after.score)}${before.started ? ` (${signed(delta)})` : ""}`)));
+    buttons.push(h("button", { class: "btn small", onclick: () => act({ type: "discard", card: sel }) }, "▼ Discard"));
+  }
+  if (st.settings.hints && cls === "mine") buttons.push(h("button", { class: "btn small ghost", onclick: () => send({ type: "hint" }), title: "Ask the bot (H)" }, "💡 Hint"));
+  const showText = panel || !(isMine(st, "play") && sel);
+  return h("div", { class: `status ${panel ? "panel" : "line"} ${cls}` }, showText ? h("span", { class: "stext" }, text) : null, buttons.length ? h("div", { class: "sbtns" }, buttons) : null, h("div", { class: "timer", id: "timer" }));
 }
 
 function peekPile(color, anchorEl) {
@@ -1252,7 +1299,7 @@ function renderOverlay() {
   }
   const g = st.game;
   if (S.ui.summaryHidden) {
-    overlay.replaceChildren(h("div", { class: "mini-bar" }, st.status === "game_over" ? "🏁 Game over" : `🏁 Round ${g.round} over`, h("button", { class: "btn small primary", onclick: () => ((S.ui.summaryHidden = false), renderOverlay()) }, "Show scores")));
+    morph(overlay, h("div", { class: "mini-bar" }, st.status === "game_over" ? "🏁 Game over" : `🏁 Round ${g.round} over`, h("button", { class: "btn small primary", onclick: () => ((S.ui.summaryHidden = false), renderOverlay()) }, "Show scores")));
     return;
   }
   const last = g.history[g.history.length - 1];
@@ -1287,7 +1334,7 @@ function renderOverlay() {
       isHost ? h("button", { class: "btn primary", onclick: () => send({ type: "play_again" }) }, "Play again ↻") : h("span", { class: "grow", style: { textAlign: "right" } }, "Waiting for the host to start a rematch…"),
     ];
   }
-  overlay.replaceChildren(h("div", { class: "backdrop" }, h("div", { class: "modal wide parchment" }, h("h2", {}, title), h("p", { class: "sub" }, sub), h("h4", { class: "label", style: { color: "#6a5236" } }, `Round ${g.history.length}`), breakdownTable(st, last.breakdown, last.scores, g.hands), totalsLine(st), h("div", { class: "actions" }, actions))));
+  morph(overlay, h("div", { class: "backdrop" }, h("div", { class: "modal wide parchment" }, h("h2", {}, title), h("p", { class: "sub" }, sub), h("h4", { class: "label", style: { color: "#6a5236" } }, `Round ${g.history.length}`), breakdownTable(st, last.breakdown, last.scores, g.hands), totalsLine(st), h("div", { class: "actions" }, actions))));
 }
 
 function confetti() {

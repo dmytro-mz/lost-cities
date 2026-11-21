@@ -32,9 +32,7 @@ async def my_move(page: Page, rng: random.Random) -> bool:
     if await visible(page, ".backdrop .btn.primary:not([disabled])"):
         await page.locator(".backdrop .btn.primary:not([disabled])").first.click()
         return True
-    status = (
-        await page.locator(".status-line").first.get_attribute("class") if await visible(page, ".status-line") else ""
-    )
+    status = await page.locator(".status").first.get_attribute("class") if await visible(page, ".status") else ""
     if "mine" not in (status or ""):
         return False
     drawables = page.locator(".deck.drawable, .slot.drawable")
@@ -78,8 +76,27 @@ async def run(args: argparse.Namespace) -> int:
         page.on("console", console)
         await page.goto(url)
         await page.wait_for_selector(".lobby")
+        # Toggling a table rule must patch the switch in place, not rebuild the lobby.
+        for _ in range(2):
+            await page.evaluate("() => { window.__keep = [...document.querySelectorAll('#main *')]; }")
+            seq = room.seq
+            await page.locator(".settings .switch").first.click()
+            for _ in range(100):
+                if room.seq > seq:
+                    break
+                await page.wait_for_timeout(20)
+            await page.wait_for_timeout(200)
+            lost = await page.evaluate("() => window.__keep.filter((el) => !el.isConnected).length")
+            if lost:
+                errors.append(f"settings toggle rebuilt {lost} lobby elements")
         await page.locator(".lobby-actions .btn.primary").click()
         await page.wait_for_selector("#game")
+        await page.wait_for_selector("#hand.active .card", timeout=8000)
+        await page.evaluate("() => { window.__board = document.querySelector('#game .tgrid'); }")
+        await page.locator("#hand.active .card").first.click()
+        if not await page.evaluate("() => window.__board.isConnected"):
+            errors.append("selecting a card rebuilt the table")
+        await page.keyboard.press("Escape")
         await page.keyboard.press("h")  # a hint must not break anything
         idle = 0
         for _ in range(4000):
