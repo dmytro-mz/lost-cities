@@ -317,32 +317,61 @@ document.addEventListener("visibilitychange", () => {
 });
 
 // FLIP: cards keep their key (card id) wherever they go, so we can slide them from where they were.
+// Cards in flight: data-key -> { ghost, hide }. A flight is drawn by a stand-in on top of everything (so it
+// never slips under other cards or the hand) while the real card waits invisibly at its destination.
+const flights = new Map();
+
+function land(key) {
+  const f = flights.get(key);
+  if (!f) return;
+  f.ghost.remove();
+  f.hide.cancel();
+  flights.delete(key);
+}
+
 function snapshot() {
   const map = new Map();
-  for (const el of document.querySelectorAll("#game [data-key]")) map.set(el.dataset.key, { rect: el.getBoundingClientRect(), node: el.cloneNode(true) });
+  for (const el of document.querySelectorAll("#game [data-key]")) {
+    const key = el.dataset.key;
+    const ghost = flights.get(key)?.ghost;
+    map.set(key, { rect: (ghost || el).getBoundingClientRect(), node: el.cloneNode(true) });
+    land(key);
+  }
   const deck = $("#deck")?.getBoundingClientRect();
   const opp = $("#opp-hand")?.getBoundingClientRect();
   return { map, deck, opp };
 }
 
+const calm = window.matchMedia("(prefers-reduced-motion: reduce)");
+
 function flyFromRect(el, from, duration = 480) {
+  if (calm.matches) return;
   const to = el.getBoundingClientRect();
   if (!to.width || !from) return;
   const dx = from.left + from.width / 2 - (to.left + to.width / 2);
   const dy = from.top + from.height / 2 - (to.top + to.height / 2);
   const sc = from.width / to.width || 1;
-  if (Math.abs(dx) + Math.abs(dy) < 2) return;
-  el.animate(
-    [
-      { transform: `translate(${dx}px, ${dy}px) scale(${sc})`, zIndex: 60 },
-      { transform: "translate(0, 0) scale(1)", zIndex: 60 },
-    ],
-    { duration, easing: "cubic-bezier(.2,.75,.25,1)" },
-  );
+  if (Math.abs(dx) + Math.abs(dy) < 2 && Math.abs(sc - 1) < 0.02) return;
+  const key = el.dataset.key;
+  land(key);
+  const ghost = el.cloneNode(true);
+  ghost.classList.remove("sel", "hint", "fresh");
+  ghost.classList.add("flying");
+  ghost.removeAttribute("id");
+  Object.assign(ghost.style, { left: `${to.left}px`, top: `${to.top}px`, width: `${to.width}px`, height: `${to.height}px`, transform: "none" });
+  ghost.style.setProperty("--w", `${to.width}px`);
+  document.body.append(ghost);
+  const hide = el.animate([{ opacity: 0 }, { opacity: 0 }], { duration });
+  const anim = ghost.animate([{ transform: `translate(${dx}px, ${dy}px) scale(${sc})` }, { transform: "none" }], { duration, easing: "cubic-bezier(.2,.75,.25,1)" });
+  flights.set(key, { ghost, hide });
+  anim.onfinish = () => {
+    if (flights.get(key)?.ghost === ghost) land(key);
+    else ghost.remove();
+  };
 }
 
 function flyClone(node, from, to, duration = 480) {
-  if (!from || !to) return;
+  if (!from || !to || calm.matches) return;
   node.classList.add("flying");
   Object.assign(node.style, { left: `${from.left}px`, top: `${from.top}px`, width: `${from.width}px`, height: `${from.height}px`, "--w": `${from.width}px` });
   node.style.setProperty("--w", `${from.width}px`);
@@ -1039,7 +1068,7 @@ function renderGame(st, main) {
         "data-drop": isMe ? `play:${color}` : null,
         onclick: target ? () => act({ type: "play", card: sel }) : null,
       },
-      ids.map((id, i) => cardFace(id, { "data-key": id, style: { "--i": i } })),
+      ids.map((id, i) => cardFace(id, { "data-key": id, class: `card face c-${color}${parseCard(id).value === 0 ? " wager" : ""}${isMe ? "" : " upright"}`, style: { "--i": i } })),
       target ? h("div", { class: "ghost", style: { "--i": ids.length } }, "▲") : null,
     );
   };

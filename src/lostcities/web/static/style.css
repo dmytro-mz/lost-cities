@@ -393,7 +393,9 @@ aside.side { border-left: 2px solid #3b2513; background: rgba(10, 6, 3, 0.55); d
 .lane.k4 { grid-column: 6; }
 .lane .card { --w: var(--cw); position: absolute; left: 0; transition: transform 0.15s; }
 .lane.me .card { top: calc(var(--i) * var(--step)); z-index: var(--i); }
-.lane.opp .card { bottom: calc(var(--i) * var(--step)); z-index: calc(20 - var(--i)); }
+.lane.opp .card { bottom: calc(var(--i) * var(--step)); z-index: var(--i); }
+/* A rival's older cards show only their bottom edge, so that band reads upright there. */
+.card.upright .band.bottom { transform: none; }
 .lane.target { background: rgba(255, 232, 160, 0.12); box-shadow: 0 0 0 2px rgba(255, 220, 120, 0.85), 0 0 22px rgba(255, 200, 80, 0.45); cursor: pointer; }
 .lane.target.hot { background: rgba(255, 232, 160, 0.25); }
 .lane .ghost { --w: var(--cw); position: absolute; left: 0; width: var(--cw); height: var(--ch); border-radius: calc(var(--cw) * 0.075); border: 2px dashed rgba(255, 233, 170, 0.85); top: calc(var(--i) * var(--step)); z-index: 30; display: grid; place-items: center; color: #fff1c8; font-size: calc(var(--cw) * 0.3); font-weight: 900; }

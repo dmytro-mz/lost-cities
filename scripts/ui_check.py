@@ -27,35 +27,40 @@ async def visible(page: Page, selector: str) -> bool:
     return await loc.count() > 0 and await loc.first.is_visible()
 
 
+FORCE = False  # with animations on, pulsing targets never count as 'stable' for Playwright
+
+
 async def my_move(page: Page, rng: random.Random) -> bool:
     """One click-level step of our turn; False if there was nothing to do."""
     if await visible(page, ".backdrop .btn.primary:not([disabled])"):
-        await page.locator(".backdrop .btn.primary:not([disabled])").first.click()
+        await page.locator(".backdrop .btn.primary:not([disabled])").first.click(force=FORCE)
         return True
     status = await page.locator(".status").first.get_attribute("class") if await visible(page, ".status") else ""
     if "mine" not in (status or ""):
         return False
     drawables = page.locator(".deck.drawable, .slot.drawable")
     if await drawables.count():
-        await drawables.nth(rng.randrange(await drawables.count())).click()
+        await drawables.nth(rng.randrange(await drawables.count())).click(force=FORCE)
         return True
     cards = page.locator("#hand.active .card")
     n = await cards.count()
     if not n:
         return False
-    await cards.nth(rng.randrange(n)).click()
+    await cards.nth(rng.randrange(n)).click(force=FORCE)
     await page.wait_for_timeout(40)
     lane = page.locator(".lane.target")
     if await lane.count() and rng.random() < 0.7:
-        await lane.first.click()
+        await lane.first.click(force=FORCE)
     elif await visible(page, ".slot.target"):
-        await page.locator(".slot.target").first.click()
+        await page.locator(".slot.target").first.click(force=FORCE)
     else:
         return False
     return True
 
 
 async def run(args: argparse.Namespace) -> int:
+    global FORCE
+    FORCE = args.motion
     room = Room("UICHK", delay_scale=0.05, seed=args.seed)
     me = room.join(TOKEN, "Tester")
     room.handle(me.id, {"type": "add_bot", "bot": "pathfinder"})
@@ -66,7 +71,8 @@ async def run(args: argparse.Namespace) -> int:
     async with serving(app, room, args.port) as url, async_playwright() as pw:
         browser = await pw.chromium.launch(executable_path=CHROME, headless=not args.headed)
         w, h = (int(x) for x in args.size.split("x"))
-        page = await browser.new_page(viewport={"width": w, "height": h}, reduced_motion="reduce")
+        motion = "no-preference" if args.motion else "reduce"
+        page = await browser.new_page(viewport={"width": w, "height": h}, reduced_motion=motion)
         page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
 
         def console(m: ConsoleMessage) -> None:
@@ -128,6 +134,7 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--port", type=int, default=8771)
     ap.add_argument("--headed", action="store_true")
+    ap.add_argument("--motion", action="store_true", help="keep card animations on")
     sys.exit(asyncio.run(run(ap.parse_args())))
 
 

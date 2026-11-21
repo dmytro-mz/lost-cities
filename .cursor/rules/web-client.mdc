@@ -27,6 +27,10 @@ alwaysApply: false
   value), the wager scene, emblems, the card back. `cardFace(id)` / `cardBack()` return elements.
 - `app.js` home, lobby, the table (CSS grid: side column + 5 colour columns; rows: rival lanes, camp, your lanes),
   hand with click / drag / keyboard, FLIP animations keyed by `data-key` = card id, round summary overlay.
+  A flight is drawn by a stand-in clone in `<body>` above everything while the real card stays invisible at its
+  destination (`flyFromRect`), so moving cards never pass under lanes or the hand. Newest card is on top in both
+  players' lanes; a rival's cards stack upward and show their (upright) bottom band.
+  `scripts/anim_frames.py` films a play, a draw and the bot's answer in slow motion into `shots/anim/`.
   Card sizes are CSS variables computed in `computeLayout()` from the window size only, never from the number of
   cards out: each expedition strip is a fixed `LANE` card heights tall and longer expeditions stack tighter.
   Modes: landscape (turn prompt in the side column when it fits, else above the hand), `short`, and `portrait`
