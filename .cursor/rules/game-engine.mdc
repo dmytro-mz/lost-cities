@@ -1,0 +1,17 @@
+---
+description: Rules engine invariants (turn flow, scoring, hidden information)
+globs: src/lostcities/game/**,src/lostcities/bots/**,tests/test_engine.py,tests/test_bots.py
+alwaysApply: false
+---
+
+# Rules engine
+
+- Card ids: `"red-7"` for numbers, `"red-w0".."red-w2"` for the three wagers of a colour (value 0).
+- Turn = PLAY (`Play` onto your expedition or `Discard`) then DRAW (`Draw("deck")` or `Draw(color)`), never from
+  `last_discard`. The round ends right after the draw that empties the deck → ROUND_OVER (`next_round()`), or
+  GAME_OVER after `Game.rounds` rounds. Next round: the higher round score starts; on a tie, whoever didn't start.
+- Scoring: `(sum − 20) × (1 + wagers)`, +20 (not multiplied) for ≥ 8 cards; unstarted expedition = 0.
+- `legal_actions(seat)` is the single source of truth; `step` raises `IllegalMove` and leaves state untouched.
+- `Game.check()` holds after every step: all 60 cards exactly once, expeditions ascend with wagers first, hand sizes.
+- `Game.view(seat)` is all a bot may see: own hand, both expeditions, full discard piles (public memory), deck size.
+- Randomness only through `Game.rng` / `Bot.rng`, seeded, so games are reproducible.

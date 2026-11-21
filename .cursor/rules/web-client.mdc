@@ -1,0 +1,29 @@
+---
+description: Web server, room protocol and the vanilla JS table client
+globs: src/lostcities/web/**,tests/test_web.py,scripts/demo.py,scripts/ui_check.py
+alwaysApply: false
+---
+
+# Web
+
+## Server / room
+
+- `Room` is synchronous table logic with no I/O; `server.py` only moves JSON over WebSockets.
+- Exactly two seats (humans or bots), extra visitors are spectators. Status: lobby → playing ⇄ round_over → game_over.
+- Every change is broadcast as a full per-viewer snapshot (`Room.state_for`). Only the viewer's own `hand` is sent;
+  `_filter_event` blanks the card of an opponent's deck draw. Full discard piles only with `settings.peek` or between
+  rounds, when both `hands` are revealed. `tests/test_web.py` checks all of it.
+- `legal` (action JSON) is sent only to the current, non-autoplay player; the client renders from it.
+- Bots, timeouts, autopilot and round transitions run from `Room.plan()` → `(delay, step)`, driven by `Room.drive()`.
+  Between rounds every online human sends `ready`; with no human online the next round starts by itself.
+- Players are identified by a random token in localStorage; `/r/CODE?me=TOKEN` moves a seat to another device.
+
+## Client (`static/`, no build step, no frameworks)
+
+- `dom.js` `h()` / `s()` build HTML / SVG and skip `null` children.
+- `art.js` all artwork as `<symbol>`s in one hidden SVG: per-site landscapes and cities (the city grows with the
+  value), the wager scene, emblems, the card back. `cardFace(id)` / `cardBack()` return elements.
+- `app.js` home, lobby, the table (CSS grid: side column + 5 colour columns; rows: rival lanes, camp, your lanes),
+  hand with click / drag / keyboard, FLIP animations keyed by `data-key` = card id, round summary overlay.
+  Card sizes are CSS variables computed in `layout()` from the available space.
+- `sound.js` synthesised effects.

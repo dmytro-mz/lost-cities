@@ -1,0 +1,42 @@
+---
+description: Lost Cities project map, layering and day-to-day commands
+alwaysApply: true
+---
+
+# Lost Cities — project map
+
+Goal: an online two-player expedition card game for friends — the complete rules, a warm table-top look with
+original card art, and bots good enough to play against.
+
+## Layout and dependency direction (never import "upwards")
+
+```
+lostcities/game/      rules engine, pure Python, no I/O                  (lowest layer)
+  cards.py             Card, the 60-card DECK, colours/sites, can_extend
+  scoring.py           score_expedition / score_player
+  actions.py           Play / Discard / Draw + JSON protocol
+  engine.py            Game state machine: step(seat, action) -> events, next_round(), view(seat), check()
+lostcities/bots/      Bot ABC + heuristic player + REGISTRY (every entry appears in the lobby)
+lostcities/runner.py  play_game(bots, rounds, seed)
+lostcities/web/       room.py (sync table logic, no I/O) · server.py (FastAPI + WebSocket)
+                       static/ (vanilla ES-module client, no build step)
+lostcities/cli.py     typer CLI (entry point `lostcities`)
+scripts/               demo / shot / ui_check (visual + browser checks)
+```
+
+## Commands (always via uv, never pip)
+
+- Tests: `uv run pytest` (must pass before you say you're done)
+- Lint/format: `uv run ruff check --fix src tests scripts && uv run ruff format src tests scripts`
+- Play: `uv run lostcities serve` (LAN) · `uv run lostcities serve --tunnel` (public link via cloudflared)
+- Bot strength: `uv run lostcities eval -a veteran,pathfinder -n 2000`
+- See the UI: `uv run python scripts/demo.py --stage home|lobby|play|draw|round|over --out shots/x.png [--size 390x844]`
+- Click through a whole match in Chrome: `uv run python scripts/ui_check.py` (fails on any JS error)
+
+## Working agreements
+
+- The server is authoritative; clients only send intents. Never trust client input.
+- Any rules change goes in `game/` with a test in `tests/test_engine.py`.
+- UI changes: render with `scripts/demo.py` (desktop and 390x844), look at the screenshot, run `scripts/ui_check.py`.
+- All art is original SVG in `static/art.js`; never copy the published game's artwork or rulebook text.
+- `shots/` is scratch output (gitignored).

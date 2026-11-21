@@ -1,2 +1,31 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors and OS
 .DS_Store
-node_modules/
+.idea/
+.vscode/
+*.swp
+
+# Local secrets
+.env
+.env.*
+
+# Scratch output
+shots/
+.uv-cache/
+
+tmp/
+runs/
+runs_smoke/
+logs/
